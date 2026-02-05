@@ -10,7 +10,10 @@ This service uses OpenAI GPT to intelligently parse:
 - Lab test names, values, dates
 - Patient information
 
-Updated to include backend format conversion.
+UPDATES:
+- user_id, doctor_id, prescription_image_url are now optional
+- No validation error if optional fields are missing
+- Converter handles optional parameters properly
 """
 
 from openai import OpenAI
@@ -31,7 +34,7 @@ class AIExtractorService:
     
     This is the brain of CareAgent AI - it understands:
     - Medical terminology
-    - Date/time expressions
+    - Date and time expressions
     - Dosage formats
     - Appointment context
     """
@@ -40,16 +43,24 @@ class AIExtractorService:
         """
         Initialize AI Extractor service.
         
+        What happens here:
+        - Create OpenAI client with provided API key
+        - Initialize data converter service
+        - Set up logging
+        
         Parameters:
-        - api_key: OpenAI API key
+        - api_key: OpenAI API key for GPT access
+        
+        Called by:
+        - API routes when extraction is needed
         """
         
         logger.info("Initializing AI Extractor service...")
         
-        # Create OpenAI client
+        # Step 1: Create OpenAI client
         self.client = OpenAI(api_key=api_key)
         
-        # Create converter instance
+        # Step 2: Create converter instance
         self.converter = DataConverterService()
         
         logger.info("AI Extractor initialized")
@@ -65,6 +76,11 @@ class AIExtractorService:
         """
         Extract structured prescription data from OCR text.
         
+        UPDATED:
+        - user_id, doctor_id, prescription_image_url are now OPTIONAL
+        - No validation error if these fields are None
+        - Converter accepts None values and handles them properly
+        
         This method parses prescription text and extracts:
         - Patient name and age
         - Medicine list with dosages and frequencies
@@ -74,21 +90,37 @@ class AIExtractorService:
         What happens here:
         1. Send raw text to GPT with specific instructions
         2. GPT analyzes and structures the data
-        3. Optionally convert to backend format
+        3. Optionally convert to backend format (even without user/doctor/image)
         4. Return structured JSON
         
         Parameters:
-        - raw_text: Unstructured text from OCR
-        - return_backend_format: If True, convert to backend DB format
-        - user_id: User ID (required if return_backend_format=True)
-        - doctor_id: Doctor ID (required if return_backend_format=True)
-        - prescription_image_url: Image URL (required if return_backend_format=True)
+        - raw_text: Unstructured text from OCR (REQUIRED)
+        - return_backend_format: If True, convert to backend DB format (default False)
+        - user_id: User ID (OPTIONAL, can be None)
+        - doctor_id: Doctor ID (OPTIONAL, can be None)
+        - prescription_image_url: Image URL (OPTIONAL, can be None)
         
         Returns:
         - Structured prescription data as dict
         
         Called by:
-        - API route when user uploads prescription image
+        - API route in app/api/extract.py when user uploads prescription image
+        
+        Examples:
+        Without backend format:
+        extract_prescription_data(raw_text="Name: John...")
+        
+        With backend format but no user/doctor:
+        extract_prescription_data(raw_text="Name: John...", return_backend_format=True)
+        
+        With backend format and all fields:
+        extract_prescription_data(
+            raw_text="Name: John...",
+            return_backend_format=True,
+            user_id=1,
+            doctor_id=1,
+            prescription_image_url="http://..."
+        )
         """
         
         logger.info("Extracting prescription data...")
@@ -132,7 +164,7 @@ Rules:
 """
         
         try:
-            # Call GPT to extract structured data
+            # Step 1: Call GPT to extract structured data
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -145,49 +177,51 @@ Rules:
                         "content": prompt
                     }
                 ],
-                temperature=0.1,
+                temperature=0.1,  # Low temperature for consistent extraction
                 max_tokens=2000
             )
             
-            # Get response text
+            # Step 2: Get response text from GPT
             result_text = response.choices[0].message.content.strip()
             
-            # Remove markdown code blocks if present
+            # Step 3: Remove markdown code blocks if present
             if result_text.startswith("```json"):
                 result_text = result_text.replace("```json", "").replace("```", "").strip()
             elif result_text.startswith("```"):
                 result_text = result_text.replace("```", "").strip()
             
-            # Parse JSON
+            # Step 4: Parse JSON response
             extracted_data = json.loads(result_text)
             
             logger.info(f"Extracted {len(extracted_data.get('medicines', []))} medicines")
             logger.info(f"Patient: {extracted_data.get('patient_name', 'Unknown')}")
             
-            # If backend format requested, convert
+            # Step 5: Convert to backend format if requested
             if return_backend_format:
-                if not all([user_id, doctor_id, prescription_image_url]):
-                    raise ValueError("user_id, doctor_id, and prescription_image_url required for backend format")
-                
                 logger.info("Converting to backend format...")
+                
+                # UPDATED: No validation - just pass whatever we have
+                # user_id, doctor_id, prescription_image_url can all be None
                 backend_data = self.converter.convert_prescription_to_backend(
                     ai_output=extracted_data,
-                    user_id=user_id,
-                    doctor_id=doctor_id,
-                    prescription_image_url=prescription_image_url
+                    user_id=user_id,  # Can be None
+                    doctor_id=doctor_id,  # Can be None
+                    prescription_image_url=prescription_image_url  # Can be None
                 )
                 
                 return backend_data
             
-            # Return AI format
+            # Step 6: Return AI format (if backend format not requested)
             return extracted_data
             
         except json.JSONDecodeError as e:
+            # Failed to parse JSON from GPT response
             logger.error(f"Failed to parse JSON: {e}")
             logger.error(f"Response was: {result_text[:200]}")
             raise RuntimeError("Failed to extract structured data from prescription")
         
         except Exception as e:
+            # Any other error during extraction
             logger.error(f"Extraction failed: {str(e)}")
             raise RuntimeError(f"Failed to extract prescription data: {str(e)}")
     
@@ -203,18 +237,36 @@ Rules:
         
         What happens here:
         1. Analyze voice transcription
-        2. Determine user intent
-        3. Extract relevant data
-        4. Return structured response
+        2. Determine user intent (what they want to do)
+        3. Extract relevant data based on intent
+        4. Generate confirmation message
+        5. Return structured response
         
         Parameters:
-        - transcribed_text: Text from speech-to-text
+        - transcribed_text: Text from speech-to-text service
         
         Returns:
-        - Intent and extracted data
+        - Dict containing intent, confidence, data, and confirmation
         
         Called by:
-        - Voice workflow API
+        - Voice workflow API in app/api/extract.py
+        
+        Example Input:
+        "Add Paracetamol 500mg twice daily after food"
+        
+        Example Output:
+        {
+            "intent": "add_medicine",
+            "confidence": 0.95,
+            "data": {
+                "medicine_name": "Paracetamol",
+                "dosage": "500mg",
+                "frequency": "twice daily",
+                "instructions": "after food"
+            },
+            "confirmation_needed": true,
+            "confirmation_message": "I understood: Add Paracetamol 500mg, twice daily after food. Is this correct?"
+        }
         """
         
         logger.info("Extracting intent from voice...")
@@ -253,6 +305,7 @@ Rules:
 """
         
         try:
+            # Step 1: Call GPT to extract intent
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -265,29 +318,33 @@ Rules:
                         "content": prompt
                     }
                 ],
-                temperature=0.2,
+                temperature=0.2,  # Slightly higher for natural language
                 max_tokens=1000
             )
             
+            # Step 2: Get response text
             result_text = response.choices[0].message.content.strip()
             
-            # Clean markdown
+            # Step 3: Clean markdown code blocks
             if "```json" in result_text:
                 result_text = result_text.split("```json")[1].split("```")[0].strip()
             elif "```" in result_text:
                 result_text = result_text.split("```")[1].split("```")[0].strip()
             
+            # Step 4: Parse JSON
             extracted_intent = json.loads(result_text)
             
             logger.info(f"Intent: {extracted_intent.get('intent')}")
             logger.info(f"Confidence: {extracted_intent.get('confidence')}")
             
+            # Step 5: Return extracted intent
             return extracted_intent
             
         except Exception as e:
+            # If extraction fails, return fallback response
             logger.error(f"Intent extraction failed: {str(e)}")
             
-            # Return fallback response
+            # Return safe fallback response
             return {
                 "intent": "unclear",
                 "confidence": 0.0,
@@ -302,19 +359,43 @@ Rules:
         
         Parses lab test results and extracts:
         - Test names
-        - Values
+        - Test values
         - Units
         - Normal ranges
-        - Dates
+        - Patient information
+        - Report date
+        
+        What happens here:
+        1. Send lab report text to GPT
+        2. GPT extracts all test information
+        3. Identifies abnormal values
+        4. Returns structured data
         
         Parameters:
-        - raw_text: Unstructured lab report text
+        - raw_text: Unstructured lab report text from OCR
         
         Returns:
-        - Structured lab data
+        - Dict containing structured lab test data
         
         Called by:
         - API route when user uploads lab PDF
+        
+        Example Input:
+        "Patient: John Doe\nHemoglobin: 14.5 g/dL (Normal: 13-17)\nGlucose: 95 mg/dL"
+        
+        Example Output:
+        {
+            "patient_name": "John Doe",
+            "tests": [
+                {
+                    "test_name": "Hemoglobin",
+                    "value": "14.5",
+                    "unit": "g/dL",
+                    "normal_range": "13-17",
+                    "status": "normal"
+                }
+            ]
+        }
         """
         
         logger.info("Extracting lab report data...")
@@ -350,28 +431,39 @@ Rules:
 """
         
         try:
+            # Step 1: Call GPT to extract lab data
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a lab report analyzer. Return only JSON."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": "You are a lab report analyzer. Return only JSON."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
                 ],
-                temperature=0.1,
+                temperature=0.1,  # Low temperature for accuracy
                 max_tokens=2000
             )
             
+            # Step 2: Get response text
             result_text = response.choices[0].message.content.strip()
             
-            # Clean markdown
+            # Step 3: Clean markdown code blocks
             if "```json" in result_text:
                 result_text = result_text.split("```json")[1].split("```")[0].strip()
             
+            # Step 4: Parse JSON
             extracted_data = json.loads(result_text)
             
             logger.info(f"Extracted {len(extracted_data.get('tests', []))} lab tests")
             
+            # Step 5: Return structured lab data
             return extracted_data
             
         except Exception as e:
+            # Log error and raise
             logger.error(f"Lab data extraction failed: {str(e)}")
             raise RuntimeError(f"Failed to extract lab report data: {str(e)}")

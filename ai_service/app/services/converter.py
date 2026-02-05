@@ -7,6 +7,10 @@ into backend database format.
 This service bridges the gap between:
 - AI extraction (natural language format)
 - Backend database (structured numeric format)
+
+UPDATES:
+- Meal timing now added to each individual medicine
+- user_id, doctor_id, prescription_image_url are now optional
 """
 
 import re
@@ -22,16 +26,20 @@ class DataConverterService:
     to backend database format.
     
     Main responsibilities:
-    - Parse frequency text to numbers ("twice daily" → 2)
-    - Parse duration text to numbers ("7 days" → 7)
+    - Parse frequency text to numbers ("twice daily" to 2)
+    - Parse duration text to numbers ("7 days" to 7)
     - Calculate medicine stock
-    - Extract meal timing (before/after)
+    - Extract meal timing per medicine (before or after food)
     - Structure data for backend API
     """
     
     def __init__(self):
         """
         Initialize converter with mapping dictionaries.
+        
+        What happens here:
+        - Create frequency mapping dictionary
+        - Set up logging
         """
         
         # Frequency text to number mapping
@@ -78,34 +86,38 @@ class DataConverterService:
         Returns:
         - Number of times per day (integer)
         
+        Called by:
+        - convert_medicine() method
+        
         Examples:
-        "twice daily" → 2
-        "3 times daily" → 3
-        "every 8 hours" → 3
+        "twice daily" becomes 2
+        "3 times daily" becomes 3
+        "every 8 hours" becomes 3
         """
         
+        # Step 1: Check if text is empty
         if not frequency_text:
             logger.warning("Empty frequency text, defaulting to 1")
             return 1
         
-        # Normalize text
+        # Step 2: Normalize text to lowercase
         text = frequency_text.lower().strip()
         
-        # Check direct mapping
+        # Step 3: Check direct mapping
         if text in self.frequency_map:
             result = self.frequency_map[text]
-            logger.info(f"Frequency '{frequency_text}' → {result}")
+            logger.info(f"Frequency '{frequency_text}' converted to {result}")
             return result
         
-        # Try to extract number from text
+        # Step 4: Try to extract number from text
         # Pattern: "3 times daily" or "take 2 times"
         numbers = re.findall(r'\d+', text)
         if numbers:
             result = int(numbers[0])
-            logger.info(f"Extracted frequency from '{frequency_text}' → {result}")
+            logger.info(f"Extracted frequency from '{frequency_text}' is {result}")
             return result
         
-        # Default to 1 if cannot parse
+        # Step 5: Default to 1 if cannot parse
         logger.warning(f"Could not parse frequency '{frequency_text}', defaulting to 1")
         return 1
     
@@ -116,7 +128,7 @@ class DataConverterService:
         What happens here:
         1. Normalize text
         2. Extract number
-        3. Convert weeks/months to days
+        3. Convert weeks or months to days
         4. Return days as integer
         
         Parameters:
@@ -125,19 +137,24 @@ class DataConverterService:
         Returns:
         - Number of days (integer)
         
+        Called by:
+        - convert_medicine() method
+        
         Examples:
-        "7 days" → 7
-        "2 weeks" → 14
-        "1 month" → 30
+        "7 days" becomes 7
+        "2 weeks" becomes 14
+        "1 month" becomes 30
         """
         
+        # Step 1: Check if text is empty
         if not duration_text:
             logger.warning("Empty duration text, defaulting to 7 days")
             return 7
         
+        # Step 2: Normalize text to lowercase
         text = duration_text.lower().strip()
         
-        # Extract number
+        # Step 3: Extract number from text
         numbers = re.findall(r'\d+', text)
         if not numbers:
             logger.warning(f"No number in duration '{duration_text}', defaulting to 7 days")
@@ -145,19 +162,19 @@ class DataConverterService:
         
         number = int(numbers[0])
         
-        # Convert based on unit
+        # Step 4: Convert based on unit (weeks or months)
         if "week" in text:
             result = number * 7
-            logger.info(f"Duration '{duration_text}' → {result} days")
+            logger.info(f"Duration '{duration_text}' converted to {result} days")
             return result
         
         elif "month" in text:
             result = number * 30
-            logger.info(f"Duration '{duration_text}' → {result} days")
+            logger.info(f"Duration '{duration_text}' converted to {result} days")
             return result
         
-        else:  # Assume days
-            logger.info(f"Duration '{duration_text}' → {number} days")
+        else:  # Assume days if no unit specified
+            logger.info(f"Duration '{duration_text}' is {number} days")
             return number
     
     def parse_meal_timing(self, instructions: str) -> Dict[str, bool]:
@@ -165,9 +182,9 @@ class DataConverterService:
         Extract meal timing from instructions.
         
         What happens here:
-        1. Check for "before" keyword
-        2. Check for "after" keyword
-        3. Return both flags
+        1. Check for "before" keyword in instructions
+        2. Check for "after" keyword in instructions
+        3. Return both flags as dictionary
         
         Parameters:
         - instructions: Text like "after food", "before meals"
@@ -175,21 +192,30 @@ class DataConverterService:
         Returns:
         - Dict with before_meal and after_meal flags
         
+        Called by:
+        - convert_medicine() method
+        
         Examples:
-        "after food" → {"before_meal": False, "after_meal": True}
-        "before meals" → {"before_meal": True, "after_meal": False}
-        "with food" → {"before_meal": False, "after_meal": True}
+        "after food" returns {"before_meal": False, "after_meal": True}
+        "before meals" returns {"before_meal": True, "after_meal": False}
+        "with food" returns {"before_meal": False, "after_meal": True}
+        empty string returns {"before_meal": False, "after_meal": False}
         """
         
+        # Step 1: Check if instructions is empty
         if not instructions:
             return {"before_meal": False, "after_meal": False}
         
+        # Step 2: Normalize text to lowercase
         text = instructions.lower()
         
+        # Step 3: Check for "before" keywords
         before_meal = any(word in text for word in ["before", "empty stomach"])
+        
+        # Step 4: Check for "after" keywords
         after_meal = any(word in text for word in ["after", "with food", "with meal"])
         
-        logger.info(f"Meal timing from '{instructions}' → before: {before_meal}, after: {after_meal}")
+        logger.info(f"Meal timing from '{instructions}' is before: {before_meal}, after: {after_meal}")
         
         return {
             "before_meal": before_meal,
@@ -200,11 +226,15 @@ class DataConverterService:
         """
         Convert single medicine from AI format to backend format.
         
+        UPDATED: Now includes before_meal and after_meal for each medicine.
+        
         What happens here:
-        1. Parse frequency to number
-        2. Parse duration to days
-        3. Calculate stock (frequency × duration)
-        4. Return backend format
+        1. Extract medicine name, frequency, duration, instructions
+        2. Parse frequency to number
+        3. Parse duration to number of days
+        4. Calculate stock (frequency times duration)
+        5. Parse meal timing from instructions
+        6. Return backend format with all fields
         
         Parameters:
         - medicine: AI extraction format
@@ -212,132 +242,138 @@ class DataConverterService:
         Returns:
         - Backend database format
         
-        AI Input:
+        Called by:
+        - convert_prescription_to_backend() method
+        
+        AI Input Example:
         {
             "name": "Paracetamol",
             "frequency": "twice daily",
-            "duration": "7 days"
+            "duration": "7 days",
+            "instructions": "after food"
         }
         
-        Backend Output:
+        Backend Output Example:
         {
             "name": "Paracetamol",
             "how_many_time": 2,
             "how_many_day": 7,
-            "stock": 14
+            "stock": 14,
+            "before_meal": false,
+            "after_meal": true
         }
         """
         
-        # Extract fields
+        # Step 1: Extract fields from AI format
         name = medicine.get("name", "Unknown")
         frequency_text = medicine.get("frequency", "once daily")
         duration_text = medicine.get("duration", "7 days")
+        instructions = medicine.get("instructions", "")
         
-        # Parse to numbers
+        # Step 2: Parse frequency text to number
         how_many_time = self.parse_frequency(frequency_text)
+        
+        # Step 3: Parse duration text to number of days
         how_many_day = self.parse_duration(duration_text)
         
-        # Calculate stock
+        # Step 4: Calculate total stock needed
         stock = how_many_time * how_many_day
         
-        logger.info(f"Converted medicine: {name} → {how_many_time}x/day for {how_many_day} days = {stock} total")
+        # Step 5: Parse meal timing from instructions
+        meal_timing = self.parse_meal_timing(instructions)
         
+        logger.info(f"Converted medicine: {name} is {how_many_time} times per day for {how_many_day} days equals {stock} total")
+        
+        # Step 6: Return backend format
         return {
             "name": name,
             "how_many_time": how_many_time,
             "how_many_day": how_many_day,
-            "stock": stock
+            "stock": stock,
+            "before_meal": meal_timing["before_meal"],
+            "after_meal": meal_timing["after_meal"]
         }
     
     def convert_prescription_to_backend(
         self, 
         ai_output: Dict[str, Any],
-        user_id: int,
-        doctor_id: int,
-        prescription_image_url: str
+        user_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+        prescription_image_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Convert complete AI extraction output to backend format.
         
+        UPDATED:
+        - user_id, doctor_id, prescription_image_url are now OPTIONAL
+        - Meal timing removed from global level
+        - Each medicine now has its own before_meal and after_meal
+        
         This is the main conversion function.
         
         What happens here:
-        1. Extract patient info
-        2. Convert all medicines
-        3. Extract medical tests
-        4. Parse meal timing from first medicine
-        5. Structure for backend API
+        1. Extract patient information
+        2. Convert all medicines to backend format
+        3. Extract medical tests if any
+        4. Build final structure matching backend database
+        5. Return complete backend-ready format
         
         Parameters:
         - ai_output: Complete AI extraction result
-        - user_id: User ID from auth
-        - doctor_id: Doctor ID from auth
-        - prescription_image_url: Uploaded image URL
+        - user_id: User ID from auth (optional, can be None)
+        - doctor_id: Doctor ID from auth (optional, can be None)
+        - prescription_image_url: Uploaded image URL (optional, can be None)
         
         Returns:
         - Backend API ready format
         
         Called by:
-        - API endpoint after AI extraction
+        - API endpoint after AI extraction (app/api/extract.py)
         """
         
         logger.info("Converting AI output to backend format...")
         
-        # Extract patient info
+        # Step 1: Extract patient information from AI output
         patient_name = ai_output.get("patient_name")
         patient_age = ai_output.get("patient_age")
         diagnosis = ai_output.get("diagnosis")
         
-        # Build patient object
+        # Step 2: Build patient object if we have data
         patient = None
         if patient_name and patient_age:
             patient = {
                 "name": patient_name,
                 "age": patient_age,
-                "sex": None,  # AI doesn't extract this currently
+                "sex": None,  # AI does not extract gender currently
                 "health_issues": diagnosis
             }
         
-        # Convert medicines
+        # Step 3: Convert all medicines from AI format to backend format
         ai_medicines = ai_output.get("medicines", [])
         backend_medicines = []
         
         for med in ai_medicines:
             try:
+                # Convert each medicine
                 converted = self.convert_medicine(med)
                 backend_medicines.append(converted)
             except Exception as e:
+                # Log error but continue with other medicines
                 logger.error(f"Failed to convert medicine {med.get('name')}: {e}")
                 continue
         
-        # Extract meal timing from first medicine with instructions
-        before_meal = False
-        after_meal = False
-        
-        for med in ai_medicines:
-            instructions = med.get("instructions", "")
-            if instructions:
-                meal_timing = self.parse_meal_timing(instructions)
-                before_meal = meal_timing["before_meal"]
-                after_meal = meal_timing["after_meal"]
-                break  # Use first medicine's timing
-        
-        # Extract medical tests
-        # AI doesn't currently extract these, but backend expects them
+        # Step 4: Extract medical tests (currently not extracted by AI)
         medical_tests = []
         
-        # Build next appointment date
-        # AI doesn't extract this, set to None
+        # Step 5: Build next appointment date (currently not extracted by AI)
         next_appointment_date = None
         
-        # Build final backend format
+        # Step 6: Build final backend format
         backend_format = {
-            "users": user_id,
-            "doctor": doctor_id,
-            "prescription_image": prescription_image_url,
+            "users": user_id,  # Can be None
+            "doctor": doctor_id,  # Can be None
+            "prescription_image": prescription_image_url,  # Can be None
             "next_appointment_date": next_appointment_date,
-            "before_meal": before_meal,
-            "after_meal": after_meal,
             "patient": patient,
             "medicines": backend_medicines,
             "medical_tests": medical_tests
@@ -354,7 +390,14 @@ class DataConverterService:
         """
         Convert voice intent data to backend medicine format.
         
-        Used when user adds medicine via voice.
+        Used when user adds medicine via voice command.
+        
+        What happens here:
+        1. Check if intent is add_medicine
+        2. Extract medicine data from intent
+        3. Build medicine object
+        4. Convert using convert_medicine() method
+        5. Return backend format
         
         Parameters:
         - intent_data: Voice intent extraction result
@@ -362,8 +405,11 @@ class DataConverterService:
         Returns:
         - Backend medicine format or None if not medicine intent
         
+        Called by:
+        - Voice workflow API when user speaks medicine command
+        
         Example:
-        Voice: "Add Paracetamol 500mg twice daily for 7 days"
+        User says: "Add Paracetamol 500mg twice daily for 7 days"
         
         Intent Data:
         {
@@ -371,31 +417,35 @@ class DataConverterService:
             "data": {
                 "medicine_name": "Paracetamol",
                 "frequency": "twice daily",
-                "duration": "7 days"
+                "instructions": "after food"
             }
         }
         
-        Backend Format:
+        Backend Format Output:
         {
             "name": "Paracetamol",
             "how_many_time": 2,
-            "how_many_day": 7,
-            "stock": 14
+            "how_many_day": 30,
+            "stock": 60,
+            "before_meal": false,
+            "after_meal": true
         }
         """
         
-        # Check if this is medicine intent
+        # Step 1: Check if this is medicine intent
         if intent_data.get("intent") != "add_medicine":
             return None
         
+        # Step 2: Extract medicine data from intent
         data = intent_data.get("data", {})
         
-        # Build medicine object from voice data
+        # Step 3: Build medicine object from voice data
         medicine = {
             "name": data.get("medicine_name", "Unknown"),
             "frequency": data.get("frequency", "once daily"),
-            "duration": "30 days"  # Default for voice
+            "duration": "30 days",  # Default duration for voice
+            "instructions": data.get("instructions", "")
         }
         
-        # Convert to backend format
+        # Step 4: Convert to backend format using convert_medicine()
         return self.convert_medicine(medicine)
