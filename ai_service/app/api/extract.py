@@ -384,6 +384,7 @@ async def extract_voice_intent(request: ExtractionRequest):
         # Step 4: Extract intent from voice transcription
         intent_data = extractor.extract_voice_intent(request.raw_text)
         
+        
         # Step 5: Return intent response
         return ExtractionResponse(
             success=True,

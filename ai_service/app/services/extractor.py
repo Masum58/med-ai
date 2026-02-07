@@ -14,6 +14,9 @@ UPDATES:
 - user_id, doctor_id, prescription_image_url are now optional
 - No validation error if optional fields are missing
 - Converter handles optional parameters properly
+- Enhanced extraction for sex/gender, next appointment
+- Better parsing for #number format and meal timing
+- Improved accuracy for fractional doses
 """
 
 from openai import OpenAI
@@ -35,8 +38,10 @@ class AIExtractorService:
     This is the brain of CareAgent AI - it understands:
     - Medical terminology
     - Date and time expressions
-    - Dosage formats
+    - Dosage formats (including fractional like 1/2 tab)
     - Appointment context
+    - Patient demographics (including sex/gender)
+    - Quantity formats (#60, #300, etc.)
     """
     
     def __init__(self, api_key: str):
@@ -80,15 +85,20 @@ class AIExtractorService:
         - user_id, doctor_id, prescription_image_url are now OPTIONAL
         - No validation error if these fields are None
         - Converter accepts None values and handles them properly
+        - Now extracts patient sex/gender
+        - Extracts next appointment date
+        - Better handling of quantity (#number) format
+        - Improved meal timing and frequency detection
         
         This method parses prescription text and extracts:
-        - Patient name and age
-        - Medicine list with dosages and frequencies
+        - Patient name, age, and sex/gender
+        - Medicine list with dosages, frequencies, and quantities
         - Doctor information
         - Date of prescription
+        - Next appointment date
         
         What happens here:
-        1. Send raw text to GPT with specific instructions
+        1. Send raw text to GPT with enhanced instructions
         2. GPT analyzes and structures the data
         3. Optionally convert to backend format (even without user/doctor/image)
         4. Return structured JSON
@@ -127,58 +137,63 @@ class AIExtractorService:
         logger.info(f"Input length: {len(raw_text)} characters")
         logger.info(f"Backend format: {return_backend_format}")
         
-        # Create detailed prompt for GPT
-        prompt = f"""You are a medical prescription parser. Extract structured data from this prescription text.
+        # IMPROVED PROMPT with better extraction instructions
+        prompt = f"""You are a medical prescription parser. Extract ALL information accurately from this prescription.
 
 Prescription Text:
 {raw_text}
 
-Extract and return ONLY a valid JSON object with this exact structure:
+Extract and return ONLY valid JSON:
 {{
-    "patient_name": "full patient name or null",
-    "patient_age": age as number or null,
-    "prescription_date": "YYYY-MM-DD format or null",
-    "doctor_name": "doctor name or null",
+    "patient_name": "full name (if mentioned)",
+    "patient_age": age as number (if mentioned),
+    "patient_sex": "Male/Female/male/female/M/F (extract from text, look for Male, Female, M, F keywords)",
+    "prescription_date": "YYYY-MM-DD format (convert dates like 19-Aug-2021 or 6/8/23)",
+    "doctor_name": "doctor name if mentioned",
+    "next_appointment": "extract follow-up date or duration like 'after 1 month', '2 weeks', null if not mentioned",
     "medicines": [
         {{
-            "name": "medicine name (cleaned, no prefix like Tab./Cap.)",
-            "type": "Tablet/Capsule/Syrup/Injection or null",
-            "dosage": "dosage with unit (e.g., 500mg, 1 tablet)",
-            "frequency": "how often (e.g., twice daily, once daily, as needed)",
-            "duration": "how long (e.g., 7 days, 2 weeks) or null",
-            "instructions": "special instructions (after food, before sleep, etc.) or empty string",
-            "refill_needed": true/false (true if long-term medicine)
+            "name": "medicine name (clean, no Tab./Cap. prefix)",
+            "type": "Tablet/Capsule/Syrup/Injection",
+            "dosage": "full dosage like '10mg', '5mg', '500mg'",
+            "quantity": "quantity like '1/2 tab', '1 tab', '2 tabs' - KEEP FRACTIONS AS IS, also extract #number like #60, #300",
+            "frequency": "EXTRACT EXACTLY: 'once daily', 'twice daily', '3x a day', '2x a day', 'daily at bedtime', 'after breakfast & after dinner'",
+            "duration": "EXTRACT FROM #NUMBER: if #60 and frequency is once daily = 60 days, if #300 and 3x daily = 100 days",
+            "instructions": "FULL INSTRUCTIONS: 'at bedtime', 'after breakfast', 'after dinner', 'for muscle spasms', etc",
+            "refill_needed": true/false
         }}
     ],
-    "diagnosis": "diagnosis/condition if mentioned, or null",
-    "advice": "doctor's advice if any, or null"
+    "diagnosis": "diagnosis if mentioned",
+    "advice": "doctor's advice"
 }}
 
-Rules:
-1. Clean medicine names (remove Tab., Cap., Inj., etc.)
-2. Parse dates to YYYY-MM-DD format
-3. Use null for missing data
-4. Extract ALL medicines mentioned
-5. Infer frequency from common patterns (BD = twice daily, TDS = thrice daily, etc.)
-6. Return ONLY valid JSON, no explanation text
+CRITICAL RULES:
+1. Sex/Gender: Look for "Male", "Female", "M", "F", "male", "female" in text - IMPORTANT!
+2. Next Appointment: Extract "follow up", "next visit", "after X days/weeks/months"
+3. Quantity: MUST include #number format (like #60, #300) AND fractional doses (like 1/2 tab)
+4. Frequency: Extract EXACTLY as written: "3x a day", "2x a day", "once daily", "daily at bedtime", "after breakfast & after dinner"
+5. Duration: Calculate from #number. Example: #60 with once daily = 60 days, #300 with 3x daily = 100 days
+6. Instructions: Include ALL timing info: "at bedtime", "after breakfast", "after dinner", "before meals"
+7. Clean medicine names: Remove "Tab.", "Cap.", "Inj." prefixes
+8. Return ONLY JSON, no explanation text
 """
         
         try:
-            # Step 1: Call GPT to extract structured data
+            # Step 1: Call GPT to extract structured data with improved prompt
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a medical data extraction expert. Return only valid JSON."
+                        "content": "You are a medical data extraction expert. Extract ALL information accurately including sex, next appointment, and #quantity numbers. Return only valid JSON."
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                temperature=0.1,  # Low temperature for consistent extraction
-                max_tokens=2000
+                temperature=0.05,  # Very low temperature for maximum accuracy
+                max_tokens=3000  # Increased for longer prescriptions
             )
             
             # Step 2: Get response text from GPT
@@ -194,7 +209,8 @@ Rules:
             extracted_data = json.loads(result_text)
             
             logger.info(f"Extracted {len(extracted_data.get('medicines', []))} medicines")
-            logger.info(f"Patient: {extracted_data.get('patient_name', 'Unknown')}")
+            logger.info(f"Patient: {extracted_data.get('patient_name', 'Unknown')}, Sex: {extracted_data.get('patient_sex', 'Not extracted')}")
+            logger.info(f"Next appointment: {extracted_data.get('next_appointment', 'None')}")
             
             # Step 5: Convert to backend format if requested
             if return_backend_format:
@@ -217,7 +233,7 @@ Rules:
         except json.JSONDecodeError as e:
             # Failed to parse JSON from GPT response
             logger.error(f"Failed to parse JSON: {e}")
-            logger.error(f"Response was: {result_text[:200]}")
+            logger.error(f"Response was: {result_text[:500]}")
             raise RuntimeError("Failed to extract structured data from prescription")
         
         except Exception as e:
