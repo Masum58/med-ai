@@ -15,6 +15,7 @@ from app.api.voice import router as voice_router
 from app.api.ocr import router as ocr_router
 from app.api.health import router as health_router
 from app.api.extract import router as extract_router
+from app.api.chat import router as chat_router
 
 
 def create_app() -> FastAPI:
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(voice_router, prefix="/voice", tags=["Voice"])
     app.include_router(ocr_router, prefix="/ocr", tags=["OCR"])
     app.include_router(extract_router, prefix="/extract", tags=["Extract"])
+    app.include_router(chat_router, prefix="/ai", tags=["AI Chat"])
 
     return app
 

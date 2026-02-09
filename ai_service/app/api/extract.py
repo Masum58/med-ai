@@ -10,10 +10,12 @@ UPDATES:
 - user_id, doctor_id, prescription_image_url are now OPTIONAL
 - BackendExtractionRequest accepts None values
 - Each medicine has its own before_meal and after_meal
+- NEW: /prescription-django endpoint for Django backend integration
 
 Endpoints:
 - POST /extract/prescription - Extract prescription data (AI format)
 - POST /extract/prescription-backend - Extract and convert to backend format
+- POST /extract/prescription-django - Extract and convert to Django format (JSON strings)
 - POST /extract/voice-intent - Extract intent from voice transcription  
 - POST /extract/lab-report - Extract lab report data
 """
@@ -276,6 +278,144 @@ async def extract_prescription_backend(request: BackendExtractionRequest):
             success=True,
             data=backend_data,
             message=f"Successfully extracted and converted {medicine_count} medicine(s)"
+        )
+        
+    except ValueError as error:
+        # Validation error from service
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error)
+        )
+    
+    except RuntimeError as error:
+        # AI extraction service error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(error)
+        )
+    
+    except Exception as error:
+        # Unexpected error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Extraction failed: {str(error)}"
+        )
+
+
+@router.post(
+    "/prescription-django",
+    response_model=ExtractionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Extract and convert to Django backend format",
+    description=(
+        "Converts prescription data to Django-compatible format with JSON strings. "
+        "Ready for direct POST to Django backend API."
+    )
+)
+async def extract_prescription_django(request: BackendExtractionRequest):
+    """
+    Extract prescription data and convert to Django backend format.
+    
+    NEW ENDPOINT for Django backend integration.
+    
+    DJANGO FORMAT:
+    - Nested objects (patient, medicines, medical_tests) converted to JSON strings
+    - Ready for multipart/form-data POST to Django
+    
+    This endpoint bridges AI service with Django backend.
+    
+    What happens here:
+    1. Validate raw text is not empty
+    2. Check OpenAI API key is configured
+    3. Initialize AI extractor
+    4. Extract and convert to backend format
+    5. Convert nested objects to JSON strings
+    6. Return Django-ready format
+    
+    Parameters:
+    - request.raw_text: Unstructured OCR text (REQUIRED)
+    - request.user_id: Current user ID (OPTIONAL)
+    - request.doctor_id: Doctor ID (OPTIONAL)
+    - request.prescription_image_url: Uploaded image URL (OPTIONAL)
+    
+    Returns:
+    - ExtractionResponse with Django-compatible format
+    
+    Django Backend Expects:
+    {
+        "users": 1,
+        "doctor": null,
+        "prescription_image": "url",
+        "next_appointment_date": null,
+        "patient": "{\"name\":\"Daniel\",\"age\":69,\"sex\":\"Male\"}",  // JSON string
+        "medicines": "[{\"name\":\"Paracetamol\",\"how_many_time\":2,...}]",  // JSON string
+        "medical_tests": "[]"  // JSON string
+    }
+    
+    Called by:
+    - Frontend after OCR completion
+    - Mobile app prescription scanner
+    
+    Example request:
+    {
+        "raw_text": "Name: Daniel\nAge: 69 Male...",
+        "user_id": 1,
+        "prescription_image_url": "https://example.com/image.jpg"
+    }
+    """
+    
+    # Step 1: Validate raw_text (only required field)
+    if not request.raw_text or not request.raw_text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Raw text cannot be empty"
+        )
+    
+    # Step 2: Check OpenAI API key is configured
+    if not OPENAI_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AI extraction service not configured"
+        )
+    
+    try:
+        # Step 3: Initialize AI extractor service
+        extractor = AIExtractorService(api_key=OPENAI_API_KEY)
+        
+        # Step 4: Extract and convert to backend format
+        backend_data = extractor.extract_prescription_data(
+            raw_text=request.raw_text,
+            return_backend_format=True,
+            user_id=request.user_id,
+            doctor_id=request.doctor_id,
+            prescription_image_url=request.prescription_image_url
+        )
+        
+        # Step 5: Import json for string conversion
+        import json
+        
+        # Step 6: Convert nested objects to JSON strings for Django
+        # Django expects patient, medicines, medical_tests as JSON strings
+        django_data = {
+            "users": backend_data.get("users"),
+            "doctor": backend_data.get("doctor"),
+            "prescription_image": backend_data.get("prescription_image"),
+            "next_appointment_date": backend_data.get("next_appointment_date"),
+            
+            # Convert nested objects to JSON strings
+            "patient": json.dumps(backend_data.get("patient")) if backend_data.get("patient") else None,
+            "medicines": json.dumps(backend_data.get("medicines")) if backend_data.get("medicines") else "[]",
+            "medical_tests": json.dumps(backend_data.get("medical_tests")) if backend_data.get("medical_tests") else "[]"
+        }
+        
+        # Step 7: Count medicines for response message
+        medicine_count = len(backend_data.get("medicines", []))
+        
+        # Step 8: Return Django-ready format
+        return ExtractionResponse(
+            success=True,
+            data=django_data,
+            message=f"Successfully converted {medicine_count} medicine(s) for Django backend"
         )
         
     except ValueError as error:

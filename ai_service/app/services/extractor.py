@@ -17,6 +17,7 @@ UPDATES:
 - Enhanced extraction for sex/gender, next appointment
 - Better parsing for #number format and meal timing
 - Improved accuracy for fractional doses
+- IMPROVED VOICE INTENT: Now returns database-actionable responses
 """
 
 from openai import OpenAI
@@ -245,79 +246,172 @@ CRITICAL RULES:
         """
         Extract intent and data from voice input.
         
+        IMPROVED: Now returns database-actionable responses with API endpoints.
+        
         This method understands what user wants to do from voice:
         - Add medicine
         - Schedule appointment
+        - Check reminder
         - Ask question
-        - Set reminder
         
         What happens here:
         1. Analyze voice transcription
         2. Determine user intent (what they want to do)
         3. Extract relevant data based on intent
-        4. Generate confirmation message
-        5. Return structured response
+        4. Provide database API endpoint and query details
+        5. Return structured response with UI action
         
         Parameters:
         - transcribed_text: Text from speech-to-text service
         
         Returns:
-        - Dict containing intent, confidence, data, and confirmation
+        - Dict containing intent, database_action, ui_action, and extracted data
         
         Called by:
         - Voice workflow API in app/api/extract.py
         
         Example Input:
-        "Add Paracetamol 500mg twice daily after food"
+        "I want to know today's medicine"
         
         Example Output:
         {
-            "intent": "add_medicine",
-            "confidence": 0.95,
-            "data": {
-                "medicine_name": "Paracetamol",
-                "dosage": "500mg",
-                "frequency": "twice daily",
-                "instructions": "after food"
+            "intent": "check_reminder",
+            "confidence": 0.9,
+            "database_action": {
+                "api_endpoint": "GET /prescriptions/my_prescriptions/",
+                "method": "GET",
+                "query_filters": {"today": true}
             },
-            "confirmation_needed": true,
-            "confirmation_message": "I understood: Add Paracetamol 500mg, twice daily after food. Is this correct?"
+            "extracted_data": {"query": "today's medicine"},
+            "ui_action": "show_medicine_list",
+            "user_response": "Here are today's medicines"
         }
         """
         
         logger.info("Extracting intent from voice...")
         logger.info(f"Input: {transcribed_text}")
         
-        prompt = f"""You are a voice assistant for elderly users managing their health.
+        prompt = f"""Voice assistant for health management.
 
-User said: "{transcribed_text}"
+User: "{transcribed_text}"
 
-Determine what the user wants to do and extract relevant information.
+Return DATABASE-ACTIONABLE JSON:
 
-Return ONLY valid JSON with this structure:
 {{
-    "intent": "add_medicine|schedule_appointment|check_reminder|ask_question|other",
-    "confidence": 0.0 to 1.0,
-    "data": {{
+    "intent": "check_reminder|add_medicine|view_prescription|schedule_appointment|refill_medicine|ask_question",
+    "confidence": 0.0-1.0,
+    
+    "database_action": {{
+        "api_endpoint": "GET /prescriptions/my_prescriptions/",
+        "method": "GET|POST|PATCH",
+        "query_filters": {{
+            "today": true,
+            "medicine_name": "name or null",
+            "date_range": "today|week|month|null"
+        }},
+        "post_data": {{}} or null
+    }},
+    
+    "extracted_data": {{
         "medicine_name": "name or null",
         "dosage": "dosage or null",
-        "frequency": "how often or null",
-        "instructions": "special notes or null",
-        "doctor_name": "name or null",
-        "appointment_date": "YYYY-MM-DD or null",
-        "appointment_time": "HH:MM or null",
-        "reason": "reason or null",
-        "query": "user's question or request"
+        "frequency": "frequency or null",
+        "duration": "duration or null",
+        "instructions": "instructions or null",
+        "query": "user's question"
     }},
+    
+    "ui_action": "show_medicine_list|show_prescription_details|show_add_form|show_calendar",
     "confirmation_needed": true/false,
-    "confirmation_message": "Clear confirmation question for user in simple English"
+    "user_response": "Simple confirmation message"
 }}
 
-Rules:
-1. Use simple, clear confirmation messages
-2. If information is incomplete, set confidence lower
-3. Always ask for confirmation for add/schedule actions
-4. Return ONLY JSON, no explanation
+EXAMPLES:
+
+"I want to know today's medicine":
+{{
+    "intent": "check_reminder",
+    "confidence": 0.9,
+    "database_action": {{
+        "api_endpoint": "GET /prescriptions/my_prescriptions/",
+        "method": "GET",
+        "query_filters": {{"today": true}}
+    }},
+    "extracted_data": {{"query": "today's medicine"}},
+    "ui_action": "show_medicine_list",
+    "confirmation_needed": false,
+    "user_response": "Here are today's medicines"
+}}
+
+"Add Paracetamol 500mg twice daily":
+{{
+    "intent": "add_medicine",
+    "confidence": 0.9,
+    "database_action": {{
+        "api_endpoint": "POST /prescriptions/{{prescription_id}}/medicines/",
+        "method": "POST",
+        "post_data": {{"medicine_name": "Paracetamol", "dosage": "500mg", "frequency": "twice daily"}}
+    }},
+    "extracted_data": {{
+        "medicine_name": "Paracetamol",
+        "dosage": "500mg",
+        "frequency": "twice daily"
+    }},
+    "ui_action": "show_add_form",
+    "confirmation_needed": true,
+    "user_response": "Adding Paracetamol 500mg twice daily. Please confirm duration and meal timing"
+}}
+
+"Show my prescriptions":
+{{
+    "intent": "view_prescription",
+    "confidence": 0.95,
+    "database_action": {{
+        "api_endpoint": "GET /prescriptions/my_prescriptions/",
+        "method": "GET"
+    }},
+    "ui_action": "show_prescription_details",
+    "confirmation_needed": false,
+    "user_response": "Showing your prescriptions"
+}}
+
+"I want to refill the medicine":
+{{
+    "intent": "refill_medicine",
+    "confidence": 0.85,
+    "database_action": {{
+        "api_endpoint": "GET /prescriptions/my_prescriptions/",
+        "method": "GET",
+        "query_filters": {{"low_stock": true}}
+    }},
+    "extracted_data": {{
+        "medicine_name": null,
+        "action": "refill"
+    }},
+    "ui_action": "show_refill_list",
+    "confirmation_needed": true,
+    "user_response": "Which medicine would you like to refill? Here are your medicines with low stock"
+}}
+
+"Refill Paracetamol":
+{{
+    "intent": "refill_medicine",
+    "confidence": 0.9,
+    "database_action": {{
+        "api_endpoint": "PATCH /prescriptions/{{prescription_id}}/medicines/{{medicine_id}}/",
+        "method": "PATCH",
+        "post_data": {{"action": "refill"}}
+    }},
+    "extracted_data": {{
+        "medicine_name": "Paracetamol",
+        "action": "refill"
+    }},
+    "ui_action": "show_refill_confirmation",
+    "confirmation_needed": true,
+    "user_response": "Refilling Paracetamol. How many days supply do you need?"
+}}
+
+Return ONLY JSON.
 """
         
         try:
@@ -327,7 +421,7 @@ Rules:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful voice assistant. Return only valid JSON."
+                        "content": "You are a helpful voice assistant. Return only valid JSON with database-actionable responses."
                     },
                     {
                         "role": "user",
@@ -352,6 +446,7 @@ Rules:
             
             logger.info(f"Intent: {extracted_intent.get('intent')}")
             logger.info(f"Confidence: {extracted_intent.get('confidence')}")
+            logger.info(f"Database Action: {extracted_intent.get('database_action', {}).get('api_endpoint')}")
             
             # Step 5: Return extracted intent
             return extracted_intent
@@ -364,9 +459,11 @@ Rules:
             return {
                 "intent": "unclear",
                 "confidence": 0.0,
-                "data": {"query": transcribed_text},
+                "database_action": None,
+                "extracted_data": {"query": transcribed_text},
+                "ui_action": "show_error",
                 "confirmation_needed": True,
-                "confirmation_message": f"I heard: {transcribed_text}. What would you like me to do?"
+                "user_response": f"I heard: {transcribed_text}. What would you like me to do?"
             }
     
     def extract_lab_report_data(self, raw_text: str) -> Dict[str, Any]:
