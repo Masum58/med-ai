@@ -3,25 +3,14 @@ chat.py
 
 UNIVERSAL AI CHAT ENDPOINT (OPTION B – PRODUCTION SAFE)
 
-IMPORTANT DESIGN PRINCIPLES
----------------------------
-• User calls ONLY this endpoint
-• AI service NEVER saves data directly to database
-• AI service ONLY:
-  - Understands user input
-  - Converts voice/image → text
-  - Detects user intent
-  - Prepares database-ready data (but does NOT save)
-  - Reads data from database (GET only)
-  - Generates human-friendly reply
-  - Instructs frontend when to use TTS
-
-DATABASE SAVE is ALWAYS handled by:
-→ Frontend or Backend service (NOT AI)
+• AI NEVER saves to database
+• AI ONLY reads database (GET)
+• AI returns clean orchestration response
 """
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from typing import Optional
+from enum import Enum
 import requests
 
 from app.services.stt import SpeechToTextService
@@ -31,72 +20,34 @@ from app.config import OPENAI_API_KEY
 
 router = APIRouter()
 
-# ------------------------------------------------------------------
-# TEMPORARY DATABASE API BASE
-# NOTE:
-# Database developer has not provided auth token yet.
-# This MUST be secured with token-based auth before production.
-# ------------------------------------------------------------------
+# --------------------------------------------------
+# ENUM FOR SWAGGER DROPDOWN
+# --------------------------------------------------
+class ReplyMode(str, Enum):
+    text = "text"
+    voice = "voice"
+    both = "both"
+
+
+# --------------------------------------------------
+# DATABASE API BASE (TEMP – NO AUTH YET)
+# --------------------------------------------------
 DATABASE_API_BASE = "https://medicalai.pythonanywhere.com/api"
 
 
 @router.post(
     "/chat",
     summary="Universal AI Chat (Text / Voice / Prescription)",
-    description="""
-Single universal AI endpoint for end users.
-
-User must send EXACTLY ONE input:
-• text  → normal chat
-• audio → voice command
-• file  → prescription / document
-
-AI handles internally:
-• STT (Speech to Text)
-• OCR (Image/PDF to Text)
-• Intent detection
-• Prescription → database-ready conversion
-• Database READ (GET only)
-• Human-friendly reply
-• Optional Text-to-Speech instruction
-
-AI NEVER saves data directly to database.
-"""
 )
 async def ai_chat(
-    # --------------------------------------------------
-    # USER INPUT (ONLY ONE IS ALLOWED)
-    # --------------------------------------------------
-    text: Optional[str] = Query(
-        None,
-        description="Typed message. Use ONLY for text chat."
-    ),
-
-    audio: Optional[UploadFile] = File(
-        None,
-        description="Voice input (mp3/wav). Use ONLY for voice commands."
-    ),
-
-    file: Optional[UploadFile] = File(
-        None,
-        description="Prescription image or PDF document."
-    ),
-
-    # --------------------------------------------------
-    # CONTEXT
-    # --------------------------------------------------
-    user_id: Optional[int] = Query(
-        None,
-        description="Logged-in user ID. Required for database READ."
-    ),
-
-    reply_mode: str = Query(
-        "text",
-        description="Response type: text | voice | both"
-    )
+    text: Optional[str] = Query(None),
+    audio: Optional[UploadFile] = File(None),
+    file: Optional[UploadFile] = File(None),
+    user_id: Optional[int] = Query(None),
+    reply_mode: ReplyMode = Query(ReplyMode.text),
 ):
     # --------------------------------------------------
-    # STEP 0: STRICT INPUT VALIDATION
+    # STEP 0: VALIDATE INPUT
     # --------------------------------------------------
     provided_inputs = [
         bool(text and text.strip()),
@@ -113,90 +64,102 @@ async def ai_chat(
     if not OPENAI_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail="AI service is not configured"
+            detail="AI service not configured"
         )
 
     # --------------------------------------------------
-    # NORMALIZE reply_mode (PRODUCTION SAFETY)
-    # --------------------------------------------------
-    reply_mode = reply_mode.strip().lower()
-
-    # --------------------------------------------------
-    # STEP 1: CONVERT INPUT → PLAIN TEXT
+    # STEP 1: CONVERT INPUT → TEXT
     # --------------------------------------------------
     final_text = ""
     input_type = "text"
 
-    # Voice → STT
-    if audio:
-        input_type = "voice"
-        audio_bytes = await audio.read()
+    try:
+        if audio:
+            input_type = "voice"
+            audio_bytes = await audio.read()
 
-        stt_service = SpeechToTextService(api_key=OPENAI_API_KEY)
-        final_text, _ = stt_service.transcribe_audio(
-            audio_bytes=audio_bytes,
-            filename=audio.filename
+            stt_service = SpeechToTextService(api_key=OPENAI_API_KEY)
+            final_text, _ = stt_service.transcribe_audio(
+                audio_bytes=audio_bytes,
+                filename=audio.filename
+            )
+
+        elif file:
+            input_type = "prescription"
+            file_bytes = await file.read()
+
+            ocr_service = OCRService(openai_api_key=OPENAI_API_KEY)
+            final_text = ocr_service.extract_text(
+                file_bytes=file_bytes,
+                filename=file.filename
+            )
+
+        else:
+            final_text = text.strip()
+
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to process input (STT/OCR error)"
         )
-
-    # File → OCR
-    elif file:
-        input_type = "prescription"
-        file_bytes = await file.read()
-
-        ocr_service = OCRService(openai_api_key=OPENAI_API_KEY)
-        final_text = ocr_service.extract_text(
-            file_bytes=file_bytes,
-            filename=file.filename
-        )
-
-    # Text
-    else:
-        final_text = text.strip()
 
     # --------------------------------------------------
-    # STEP 2: INTENT DETECTION (AI BRAIN)
+    # STEP 2: INTENT DETECTION
     # --------------------------------------------------
     extractor = AIExtractorService(api_key=OPENAI_API_KEY)
-    intent_result = extractor.extract_voice_intent(final_text)
+
+    try:
+        intent_result = extractor.extract_voice_intent(final_text)
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="AI intent detection failed"
+        )
 
     intent = intent_result.get("intent")
-    confidence = intent_result.get("confidence")
+    confidence = intent_result.get("confidence", 0)
     backend_action = intent_result.get("database_action")
 
     # --------------------------------------------------
-    # STEP 3: PRESCRIPTION → DATABASE-READY DATA
-    # (NO SAVE — PREPARE ONLY)
+    # STEP 3: PRESCRIPTION → STRUCTURED DATA
     # --------------------------------------------------
     structured_data = None
 
     if input_type == "prescription":
-        structured_data = extractor.extract_prescription_data(
-            raw_text=final_text,
-            return_backend_format=True,
-            user_id=user_id
-        )
+        try:
+            structured_data = extractor.extract_prescription_data(
+                raw_text=final_text,
+                return_backend_format=True,
+                user_id=user_id
+            )
+        except Exception:
+            structured_data = None
 
     # --------------------------------------------------
-    # STEP 4: DATABASE READ (GET ONLY)
+    # STEP 4: DATABASE READ (SAFE + TIMEOUT)
     # --------------------------------------------------
     db_data = None
 
     if backend_action and user_id:
         try:
-            # Example backend_action:
-            # "GET /prescriptions/my_prescriptions/"
-            endpoint = backend_action["api_endpoint"].replace("GET ", "")
-            url = DATABASE_API_BASE + endpoint
+            endpoint = backend_action.get("api_endpoint", "")
+            if endpoint.startswith("GET "):
+                endpoint = endpoint.replace("GET ", "")
 
+            url = DATABASE_API_BASE + endpoint
             params = backend_action.get("query_filters", {})
-            response = requests.get(url, params=params, timeout=10)
+
+            response = requests.get(
+                url,
+                params=params,
+                timeout=5  # ⚠ prevent hanging
+            )
             response.raise_for_status()
 
             db_data = response.json()
 
         except Exception:
-            # Fail-safe: AI should never break user experience
-            db_data = None
+            db_data = None  # Never break user flow
 
     # --------------------------------------------------
     # STEP 5: HUMAN-FRIENDLY MESSAGE
@@ -206,25 +169,29 @@ async def ai_chat(
         "I understood your request."
     )
 
-    # Example: Refill medicine flow
-    if intent == "refill_medicine" and db_data:
-        lines = []
-        lines.append(f"You have {len(db_data)} medicines running low.")
+    # Refill enrichment (SAFE)
+    if intent == "refill_medicine" and isinstance(db_data, list):
+        try:
+            lines = []
+            lines.append(f"You have {len(db_data)} medicines running low.")
 
-        for med in db_data:
-            lines.append(
-                f"{med['name']} has {med['stock']} tablets left."
-            )
+            for med in db_data:
+                name = med.get("name", "Unknown medicine")
+                stock = med.get("stock", 0)
+                lines.append(f"{name} has {stock} tablets left.")
 
-        lines.append("Would you like to refill any of them?")
-        assistant_message = " ".join(lines)
+            lines.append("Would you like to refill any of them?")
+            assistant_message = " ".join(lines)
+
+        except Exception:
+            pass
 
     # --------------------------------------------------
-    # STEP 6: TTS INSTRUCTION (NO AUDIO DATA)
+    # STEP 6: TTS ORCHESTRATION (NO AUDIO HERE)
     # --------------------------------------------------
     tts_payload = None
 
-    if reply_mode in ["voice", "both"]:
+    if reply_mode in [ReplyMode.voice, ReplyMode.both]:
         tts_payload = {
             "enabled": True,
             "endpoint": "/voice/tts",
@@ -236,30 +203,19 @@ async def ai_chat(
             }
         }
 
-
     # --------------------------------------------------
-    # STEP 7: FINAL RESPONSE (CLEAN & PRODUCTION SAFE)
+    # FINAL RESPONSE
     # --------------------------------------------------
     return {
         "success": True,
         "input_type": input_type,
-
         "intent": intent,
         "confidence": confidence,
-
-        # AI-prepared data (frontend decides SAVE)
         "data": structured_data,
-
-        # Backend read transparency
         "backend_action": backend_action,
         "db_data": db_data,
-
-        # Human-readable response
         "assistant_message": assistant_message,
-
-        # TTS instruction (frontend calls /voice/tts)
         "tts": tts_payload,
-
         "confirmation_needed": intent_result.get(
             "confirmation_needed", False
         )
