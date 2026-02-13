@@ -12,38 +12,45 @@ Prescription extraction
 
 Intent detection
 
-Universal AI Chat Orchestration
+Universal AI Chat orchestration
 
 This service does NOT save data directly to the database.
 Database save operations must be handled by the backend system.
 
-1. Installation Guide
-Clone Repository
+Installation Guide:
+
+1. Clone Repository:
+
 git clone https://github.com/your-username/med-ai-service.git
+
 cd med-ai-service
 
-2. Create Virtual Environment
-Windows
+2. Create Virtual Environment:
+
+Windows:
+
 python -m venv venv
 venv\Scripts\activate
 
-macOS / Linux
+macOS / Linux:
+
 python3 -m venv venv
 source venv/bin/activate
 
-3. Install Dependencies
+3. Install Dependencies:
+
 pip install -r requirements.txt
 
-4. Configure Environment Variables
+4. Configure Environment Variables:
 
 Create a .env file in project root:
 
 OPENAI_API_KEY=your_openai_api_key_here
 
-5. Run the Application
-Windows
+Run the Application:
+Windows:
 
-If uvicorn is not recognized, use:
+If uvicorn is not recognized:
 
 python run.py
 
@@ -52,7 +59,8 @@ Or:
 
 python -m uvicorn app.main:app --reload
 
-macOS
+macOS / Linux:
+
 uvicorn app.main:app --reload
 
 
@@ -77,7 +85,6 @@ Base URL:
 http://localhost:8000
 
 Health Check
-
 GET /health
 
 Response:
@@ -86,7 +93,8 @@ Response:
   "status": "ok"
 }
 
-Voice APIs
+Voice APIs:
+
 POST /voice/stt
 
 Convert speech to text.
@@ -96,7 +104,6 @@ Request:
 multipart/form-data
 
 file: audio.wav / audio.mp3
-
 
 Response:
 
@@ -122,7 +129,8 @@ Response:
 
 MP3 audio file (binary)
 
-OCR API
+OCR API:
+
 POST /ocr/extract
 
 Extract raw text from image or PDF.
@@ -132,7 +140,6 @@ Request:
 multipart/form-data
 
 file: prescription.png / prescription.pdf
-
 
 Response:
 
@@ -174,7 +181,7 @@ Response:
     "name": "John Doe",
     "age": 45
   },
-  "medicines": [...]
+  "medicines": []
 }
 
 Intent Extraction
@@ -194,7 +201,7 @@ Response:
   "confidence": 0.9
 }
 
-Universal AI Chat
+Universal AI Chat:
 POST /ai/chat
 
 Single universal endpoint for end users.
@@ -227,7 +234,8 @@ TTS instruction
 
 AI NEVER saves data directly.
 
-Example Request
+Example Request:
+
 POST /ai/chat?text=How many medicines are left?&user_id=1&reply_mode=both
 
 
@@ -247,16 +255,16 @@ Response:
 }
 
 
-Frontend must call /voice/tts using the payload to generate the audio.
+Frontend must call /voice/tts using the payload to generate audio.
 
-Important Architecture Notes
+1- Important Architecture Notes
 
-AI service does NOT save to database
+2 -AI service does NOT save to database
 
-Database save must be triggered explicitly by backend/frontend
+3- Database save must be triggered explicitly by backend/frontend
 
-AI only prepares data and reads data
+4- AI only prepares data and reads data
 
-TTS audio generation is separated for scalability
+5- TTS audio generation is separated for scalability
 
-Secure token-based authentication must be added before production deployment
+6- Secure token-based authentication must be added before production deployment
