@@ -226,7 +226,18 @@ CRITICAL RULES:
                     prescription_image_url=prescription_image_url  # Can be None
                 )
                 
-                return backend_data
+                return [
+                    {
+                        "id": None,  # DB will assign
+                        "users": backend_data.get("users"),
+                        "doctor": backend_data.get("doctor"),
+                        "prescription_image": backend_data.get("prescription_image"),
+                        "next_appointment_date": backend_data.get("next_appointment_date"),
+                        "patient": backend_data.get("patient"),
+                        "medicines": backend_data.get("medicines", []),
+                        "medical_tests": backend_data.get("medical_tests", [])   
+                    }
+                ]
             
             # Step 6: Return AI format (if backend format not requested)
             return extracted_data

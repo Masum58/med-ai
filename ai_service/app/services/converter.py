@@ -401,14 +401,47 @@ class DataConverterService:
         logger.info(f"Converted medicine: {name} is {how_many_time} times per day for {how_many_day} days equals {stock} total")
         
         # Step 7: Return backend format
+        def build_slot(enabled: bool):
+            if not enabled:
+                return None
+            return {
+                "time": None,
+                "before_meal": meal_timing["before_meal"],
+                "after_meal": meal_timing["after_meal"]
+            }
+
+        morning = afternoon = evening = night = None
+
+        if how_many_time == 1:
+            morning = build_slot(True)
+
+        elif how_many_time == 2:
+            morning = build_slot(True)
+            night = build_slot(True)
+
+        elif how_many_time == 3:
+            morning = build_slot(True)
+            afternoon = build_slot(True)
+            night = build_slot(True)
+
+        elif how_many_time >= 4:
+            morning = build_slot(True)
+            afternoon = build_slot(True)
+            evening = build_slot(True)
+            night = build_slot(True)
+
         return {
+            "id": None,
             "name": name,
-            "how_many_time": how_many_time,
             "how_many_day": how_many_day,
             "stock": stock,
-            "before_meal": meal_timing["before_meal"],
-            "after_meal": meal_timing["after_meal"]
+            "morning": morning,
+            "afternoon": afternoon,
+            "evening": evening,
+            "night": night
         }
+
+       
     
     def convert_prescription_to_backend(
         self, 

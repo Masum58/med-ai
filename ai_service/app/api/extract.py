@@ -269,6 +269,8 @@ async def extract_prescription_backend(request: BackendExtractionRequest):
             doctor_id=request.doctor_id,  # Can be None
             prescription_image_url=request.prescription_image_url  # Can be None
         )
+        if isinstance(backend_data, list):
+            backend_data = backend_data[0]
         
         # Step 5: Count medicines for response message
         medicine_count = len(backend_data.get("medicines", []))
@@ -390,6 +392,8 @@ async def extract_prescription_django(request: BackendExtractionRequest):
             doctor_id=request.doctor_id,
             prescription_image_url=request.prescription_image_url
         )
+        if isinstance(backend_data, list):
+            backend_data = backend_data[0]
         
         # Step 5: Import json for string conversion
         import json
