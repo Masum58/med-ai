@@ -1,27 +1,35 @@
 """
 chat.py
 
-UNIVERSAL AI CHAT ENDPOINT (OPTION B – PRODUCTION SAFE)
+UNIVERSAL AI CHAT ENDPOINT (PRODUCTION SAFE)
 
-• AI NEVER saves to database
-• AI ONLY reads database (GET)
-• AI returns clean orchestration response
+- AI NEVER saves to database
+- AI ONLY reads database (GET)
+- AI returns clean orchestration response
+
+ONE ENDPOINT - 3 modes:
+1. TEXT:         POST /ai/chat  →  raw JSON body
+2. VOICE:        POST /ai/chat  →  form-data with audio file
+3. PRESCRIPTION: POST /ai/chat  →  form-data with image file
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from typing import Optional
 from enum import Enum
+from pydantic import BaseModel
 import requests
+import json
 
 from app.services.stt import SpeechToTextService
 from app.services.ocr import OCRService
 from app.services.extractor import AIExtractorService
-from app.config import OPENAI_API_KEY
+from app.config import OPENAI_API_KEY,DJANGO_ACCESS_TOKEN
 
 router = APIRouter()
 
+
 # --------------------------------------------------
-# ENUM FOR SWAGGER DROPDOWN
+# ENUMS & MODELS
 # --------------------------------------------------
 class ReplyMode(str, Enum):
     text = "text"
@@ -30,64 +38,139 @@ class ReplyMode(str, Enum):
 
 
 # --------------------------------------------------
-# DATABASE API BASE (TEMP – NO AUTH YET)
+# DATABASE API BASE
 # --------------------------------------------------
-DATABASE_API_BASE = "https://medicalai.pythonanywhere.com/api"
+DATABASE_API_BASE = "https://test15.fireai.agency"
 
 
+
+# --------------------------------------------------
+# SINGLE ENDPOINT
+# --------------------------------------------------
 @router.post(
     "/chat",
     summary="Universal AI Chat (Text / Voice / Prescription)",
+    description=(
+        "ONE endpoint for all 3 modes.\n\n"
+        "TEXT MODE - Postman Body → raw → JSON:\n"
+        '{"text": "Give me today medicines", "user_id": 4, "reply_mode": "text"}\n\n'
+        "VOICE MODE - Postman Body → form-data:\n"
+        "audio = Recording.m4a, user_id = 4, reply_mode = voice\n\n"
+        "PRESCRIPTION MODE - Postman Body → form-data:\n"
+        "file = prescription.jpg, user_id = 4, reply_mode = text"
+    ),
+    tags=["AI Chat"]
 )
 async def ai_chat(
-    text: Optional[str] = Query(None),
-    audio: Optional[UploadFile] = File(None),
-    file: Optional[UploadFile] = File(None),
-    user_id: Optional[int] = Query(None),
-    reply_mode: ReplyMode = Query(ReplyMode.text),
+    request: Request,
+    audio: Optional[UploadFile] = File(None, description="Audio file (.m4a .mp3 .wav) for voice mode"),
+    file: Optional[UploadFile] = File(None, description="Prescription image (PNG JPG PDF) for prescription mode"),
 ):
+    """
+    TEXT MODE - Postman:
+        Body → raw → JSON
+        {"text": "Give me today's medicines", "user_id": 4, "reply_mode": "text"}
+
+    VOICE MODE - Postman:
+        Body → form-data
+        audio    = [select audio file]
+        user_id  = 4
+        reply_mode = voice
+
+    PRESCRIPTION MODE - Postman:
+        Body → form-data
+        file     = [select image]
+        user_id  = 4
+        reply_mode = text
+    """
+
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="AI service not configured")
+
     # --------------------------------------------------
-    # STEP 0: VALIDATE INPUT
+    # PARSE INPUT - JSON or form-data
     # --------------------------------------------------
-    provided_inputs = [
-        bool(text and text.strip()),
-        bool(audio),
-        bool(file)
-    ]
+    text = None
+    user_id = None
+    reply_mode = ReplyMode.text
+
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        # TEXT MODE: raw JSON body
+        try:
+            body = await request.json()
+            text = body.get("text")
+            user_id = body.get("user_id")
+            reply_mode = ReplyMode(body.get("reply_mode", "text"))
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail='Invalid JSON. Example: {"text": "your message", "user_id": 4, "reply_mode": "text"}'
+            )
+
+    else:
+        # VOICE/PRESCRIPTION MODE: form-data
+        try:
+            form = await request.form()
+            user_id_str = form.get("user_id")
+            user_id = int(user_id_str) if user_id_str else None
+            reply_mode_str = form.get("reply_mode", "text")
+            reply_mode = ReplyMode(reply_mode_str)
+        except Exception:
+            user_id = None
+            reply_mode = ReplyMode.text
+
+    # --------------------------------------------------
+    # VALIDATE INPUT
+    # --------------------------------------------------
+    audio_provided = bool(audio and audio.filename and audio.filename.strip())
+    file_provided = bool(file and file.filename and file.filename.strip())
+    text_provided = bool(text and str(text).strip())
+
+    provided_inputs = [text_provided, audio_provided, file_provided]
 
     if sum(provided_inputs) != 1:
         raise HTTPException(
             status_code=400,
-            detail="Provide EXACTLY ONE input: text OR audio OR file"
-        )
-
-    if not OPENAI_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="AI service not configured"
+            detail=(
+                "Provide EXACTLY ONE input: "
+                "JSON body with text OR audio file OR prescription file"
+            )
         )
 
     # --------------------------------------------------
-    # STEP 1: CONVERT INPUT → TEXT
+    # CONVERT INPUT TO TEXT
     # --------------------------------------------------
     final_text = ""
     input_type = "text"
 
+    SUPPORTED_AUDIO = [
+        ".flac", ".m4a", ".mp3", ".mp4",
+        ".mpeg", ".mpga", ".oga", ".ogg",
+        ".wav", ".webm"
+    ]
+
     try:
-        if audio:
+        if audio_provided:
+            # Validate audio format
+            audio_ext = "." + audio.filename.split(".")[-1].lower()
+            if audio_ext not in SUPPORTED_AUDIO:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported audio format. Supported: {SUPPORTED_AUDIO}"
+                )
             input_type = "voice"
             audio_bytes = await audio.read()
-
             stt_service = SpeechToTextService(api_key=OPENAI_API_KEY)
             final_text, _ = stt_service.transcribe_audio(
                 audio_bytes=audio_bytes,
                 filename=audio.filename
             )
 
-        elif file:
+        elif file_provided:
             input_type = "prescription"
             file_bytes = await file.read()
-
             ocr_service = OCRService(openai_api_key=OPENAI_API_KEY)
             final_text = ocr_service.extract_text(
                 file_bytes=file_bytes,
@@ -95,8 +178,10 @@ async def ai_chat(
             )
 
         else:
-            final_text = text.strip()
+            final_text = str(text).strip()
 
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(
             status_code=500,
@@ -104,24 +189,21 @@ async def ai_chat(
         )
 
     # --------------------------------------------------
-    # STEP 2: INTENT DETECTION
+    # INTENT DETECTION
     # --------------------------------------------------
     extractor = AIExtractorService(api_key=OPENAI_API_KEY)
 
     try:
         intent_result = extractor.extract_voice_intent(final_text)
     except Exception:
-        raise HTTPException(
-            status_code=500,
-            detail="AI intent detection failed"
-        )
+        raise HTTPException(status_code=500, detail="AI intent detection failed")
 
     intent = intent_result.get("intent")
     confidence = intent_result.get("confidence", 0)
     backend_action = intent_result.get("database_action")
 
     # --------------------------------------------------
-    # STEP 3: PRESCRIPTION → STRUCTURED DATA
+    # PRESCRIPTION → STRUCTURED DATA
     # --------------------------------------------------
     structured_data = None
 
@@ -136,58 +218,107 @@ async def ai_chat(
             structured_data = None
 
     # --------------------------------------------------
-    # STEP 4: DATABASE READ (SAFE + TIMEOUT)
+    # DATABASE READ (SAFE + TIMEOUT)
     # --------------------------------------------------
     db_data = None
 
     if backend_action and user_id:
         try:
             endpoint = backend_action.get("api_endpoint", "")
+
+            if "/prescriptions/my_prescriptions/" in endpoint:
+                endpoint = "/treatments/prescription"
+
             if endpoint.startswith("GET "):
                 endpoint = endpoint.replace("GET ", "")
 
             url = DATABASE_API_BASE + endpoint
             params = backend_action.get("query_filters", {})
 
+            print("FINAL URL:", url)
+
             response = requests.get(
                 url,
                 params=params,
-                timeout=5  # ⚠ prevent hanging
+                headers={
+                    "Authorization": f"Bearer {DJANGO_ACCESS_TOKEN}"
+                },
+                timeout=5
             )
-            response.raise_for_status()
 
+            response.raise_for_status()
             db_data = response.json()
 
-        except Exception:
-            db_data = None  # Never break user flow
+        except Exception as e:
+            print("DATABASE ERROR:", e)
+            db_data = None
 
+    
     # --------------------------------------------------
-    # STEP 5: HUMAN-FRIENDLY MESSAGE
+    # HUMAN-FRIENDLY MESSAGE
     # --------------------------------------------------
     assistant_message = intent_result.get(
-        "user_response",
-        "I understood your request."
+    "user_response",
+    "I understood your request."
     )
 
-    # Refill enrichment (SAFE)
-    if intent == "refill_medicine" and isinstance(db_data, list):
+    # 🔥 SMART MEDICINE FORMATTER
+    if intent == "check_reminder" and isinstance(db_data, list):
         try:
             lines = []
-            lines.append(f"You have {len(db_data)} medicines running low.")
+            lines.append("Here are today's medicines:\n")
 
+            for prescription in db_data:
+                patient_name = prescription.get("patient", {}).get("name", "Unknown")
+
+                for med in prescription.get("medicines", []):
+                    name = med.get("name", "Unknown")
+                    stock = med.get("stock", 0)
+
+                    schedule_parts = []
+
+                    for period in ["morning", "afternoon", "evening", "night"]:
+                        period_data = med.get(period)
+                        if period_data:
+                            time = period_data.get("time")
+                            before = period_data.get("before_meal")
+                            after = period_data.get("after_meal")
+
+                            meal_text = ""
+                            if before:
+                                meal_text = "before meal"
+                            elif after:
+                                meal_text = "after meal"
+
+                            schedule_parts.append(f"{period} at {time} ({meal_text})")
+
+                    schedule_text = ", ".join(schedule_parts)
+
+                    lines.append(
+                        f"- {name} → {schedule_text} | Stock: {stock}"
+                    )
+
+            assistant_message = "\n".join(lines)
+
+        except Exception as e:
+            print("FORMAT ERROR:", e)
+
+
+    # Refill enrichment
+    if intent == "refill_medicine" and isinstance(db_data, list):
+        try:
+            lines = [f"You have {len(db_data)} medicines running low."]
             for med in db_data:
                 name = med.get("name", "Unknown medicine")
                 stock = med.get("stock", 0)
                 lines.append(f"{name} has {stock} tablets left.")
-
             lines.append("Would you like to refill any of them?")
             assistant_message = " ".join(lines)
-
         except Exception:
             pass
 
     # --------------------------------------------------
-    # STEP 6: TTS ORCHESTRATION (NO AUDIO HERE)
+    # TTS ORCHESTRATION
     # --------------------------------------------------
     tts_payload = None
 
@@ -216,7 +347,5 @@ async def ai_chat(
         "db_data": db_data,
         "assistant_message": assistant_message,
         "tts": tts_payload,
-        "confirmation_needed": intent_result.get(
-            "confirmation_needed", False
-        )
+        "confirmation_needed": intent_result.get("confirmation_needed", False)
     }
