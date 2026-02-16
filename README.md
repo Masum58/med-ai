@@ -1,91 +1,94 @@
-Med-AI Service
+🚀 Med-AI Service
 
-AI-powered backend service for:
+AI-powered backend orchestration service for medical workflows.
 
-Speech to Text (STT)
+🧠 What This Service Does
 
-Text to Speech (TTS)
+Med-AI is an AI microservice that handles:
 
-OCR (Image/PDF → Text)
+🎤 Speech to Text (STT)
 
-Prescription extraction
+🔊 Text to Speech (TTS)
 
-Intent detection
+🖼 OCR (Image/PDF → Text)
 
-Universal AI Chat orchestration
+💊 Prescription Extraction (AI → Structured Data)
 
-This service does NOT save data directly to the database.
-Database save operations must be handled by the backend system.
+🎯 Intent Detection
 
-Installation Guide:
+🤖 Universal AI Chat Orchestration
 
-1. Clone Repository:
+📖 Database READ (GET only)
 
-git clone https://github.com/your-username/med-ai-service.git
+⚠️ Architecture Rule (Very Important)
 
-cd med-ai-service
+This service:
 
-2. Create Virtual Environment:
+❌ Does NOT save data to database
 
-Windows:
+❌ Does NOT modify backend records
 
+✅ ONLY reads database (GET)
+
+✅ Prepares structured data for backend
+
+✅ Returns orchestration response
+
+✅ Provides TTS instructions (audio generated separately)
+
+Database save operations must be handled by the main backend system.
+
+🛠 Installation Guide
+1️⃣ Clone Repository
+git clone https://github.com/your-username/Med-AI.git
+cd Med-AI/ai_service
+
+2️⃣ Create Virtual Environment
+Windows
 python -m venv venv
 venv\Scripts\activate
 
-macOS / Linux:
-
+macOS / Linux
 python3 -m venv venv
 source venv/bin/activate
 
-3. Install Dependencies:
-
+3️⃣ Install Dependencies
 pip install -r requirements.txt
 
-4. Configure Environment Variables:
+4️⃣ Configure Environment Variables
 
-Create a .env file in project root:
+Create a .env file inside ai_service/:
 
 OPENAI_API_KEY=your_openai_api_key_here
+DJANGO_ACCESS_TOKEN=your_backend_access_token
 
-Run the Application:
-Windows:
-
-If uvicorn is not recognized:
-
+▶️ Run the Application
+Windows
 python run.py
 
 
-Or:
+OR
 
 python -m uvicorn app.main:app --reload
 
-macOS / Linux:
-
+macOS / Linux
 uvicorn app.main:app --reload
 
+🌍 Application URLs
 
-If uvicorn is not recognized:
-
-python3 -m uvicorn app.main:app --reload
-
-
-Application will run at:
+Local Server:
 
 http://localhost:8000
 
 
-Swagger documentation:
+Swagger Docs:
 
 http://localhost:8000/docs
 
-API Documentation
-
-Base URL:
-
-http://localhost:8000
-
-Health Check
+📡 API Overview
+🩺 Health Check
 GET /health
+
 
 Response:
 
@@ -93,17 +96,13 @@ Response:
   "status": "ok"
 }
 
-Voice APIs:
-
+🎤 Voice APIs
+🔹 Speech to Text
 POST /voice/stt
 
-Convert speech to text.
 
-Request:
-
-multipart/form-data
-
-file: audio.wav / audio.mp3
+Request: multipart/form-data
+file = audio.wav / audio.mp3
 
 Response:
 
@@ -112,55 +111,44 @@ Response:
   "language": "en"
 }
 
+🔹 Text to Speech
 POST /voice/tts
 
-Convert text to speech.
 
 Request:
 
 {
-  "text": "Time to take your Paracetamol 500mg",
+  "text": "Time to take your medicine",
   "voice": "nova",
   "speed": 1
 }
 
 
 Response:
-
 MP3 audio file (binary)
 
-OCR API:
-
+🖼 OCR API
 POST /ocr/extract
+
 
 Extract raw text from image or PDF.
 
-Request:
-
-multipart/form-data
-
-file: prescription.png / prescription.pdf
+Request: multipart/form-data
+file = prescription.png
 
 Response:
 
 {
-  "raw_text": "DD FORM 1289...\nSig: 5mL tid a.c."
+  "raw_text": "Name: John Doe\nTab. Paracetamol 500mg BD"
 }
 
-Extraction APIs
+🧾 Extraction APIs
+🔹 AI Structured Format (UI Friendly)
 POST /extract/prescription
 
-AI-readable structured output (for UI/debug).
+🔹 Backend Ready Format (MAIN)
+POST /extract/prescription-backend
 
-Request:
-
-{
-  "raw_text": "Name: John Doe\nAge: 45\nTab. Paracetamol 500mg BD"
-}
-
-POST /extract/prescription-backend (MAIN)
-
-Backend database-ready format.
 
 Request:
 
@@ -184,8 +172,9 @@ Response:
   "medicines": []
 }
 
-Intent Extraction
+🎯 Intent Detection
 POST /extract/voice-intent
+
 
 Request:
 
@@ -201,22 +190,43 @@ Response:
   "confidence": 0.9
 }
 
-Universal AI Chat:
+🤖 Universal AI Chat (Core Endpoint)
 POST /ai/chat
 
-Single universal endpoint for end users.
-
-Rule:
+🔥 Rule:
 
 Send ONLY ONE input:
 
-text
+JSON body (text mode)
 
-OR audio
+audio file (voice mode)
 
-OR file
+file (prescription mode)
 
-AI automatically handles:
+🟢 Text Mode (Postman → raw → JSON)
+{
+  "text": "Give me today's medicines",
+  "user_id": 6,
+  "reply_mode": "both"
+}
+
+🟢 Voice Mode (form-data)
+
+audio = recording.m4a
+
+user_id = 6
+
+reply_mode = voice
+
+🟢 Prescription Mode (form-data)
+
+file = prescription.jpg
+
+user_id = 6
+
+reply_mode = text
+
+🧠 AI Automatically Handles
 
 STT
 
@@ -226,21 +236,13 @@ Intent detection
 
 Prescription → backend-ready conversion
 
-Database READ (GET only)
+Secure DB READ (GET only)
 
 Human-friendly response
 
-TTS instruction
+TTS instruction payload
 
-AI NEVER saves data directly.
-
-Example Request:
-
-POST /ai/chat?text=How many medicines are left?&user_id=1&reply_mode=both
-
-
-Response:
-
+Example Response
 {
   "assistant_message": "You have 2 medicines running low.",
   "tts": {
@@ -255,16 +257,30 @@ Response:
 }
 
 
-Frontend must call /voice/tts using the payload to generate audio.
+Frontend must call /voice/tts separately to generate audio.
 
-1- Important Architecture Notes
+🔐 Production Notes
 
-2 -AI service does NOT save to database
+JWT authentication required for database access
 
-3- Database save must be triggered explicitly by backend/frontend
+AI never stores sensitive data
 
-4- AI only prepares data and reads data
+Token-based secure backend communication
 
-5- TTS audio generation is separated for scalability
+TTS generation separated for scalability
 
-6- Secure token-based authentication must be added before production deployment
+Designed for microservice architecture
+
+🏗 Architecture Summary
+Frontend
+   ↓
+AI Service (This Repo)
+   ↓
+Backend API (Django / DRF)
+   ↓
+Database
+
+
+AI prepares.
+Backend saves.
+Frontend orchestrates.
