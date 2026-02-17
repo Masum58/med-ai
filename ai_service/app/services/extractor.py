@@ -591,3 +591,39 @@ Rules:
             # Log error and raise
             logger.error(f"Lab data extraction failed: {str(e)}")
             raise RuntimeError(f"Failed to extract lab report data: {str(e)}")
+
+    def generate_general_response(self, user_text: str) -> str:
+        """
+        Handle non-medical / general conversation safely.
+        Production-safe general AI fallback.
+        """
+
+        logger.info("Generating general AI response...")
+
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a helpful AI assistant. "
+                            "If the user asks medical database related questions, "
+                            "tell them to use the health features. "
+                            "Otherwise answer naturally and helpfully."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": user_text
+                    }
+                ],
+                temperature=0.6,
+                max_tokens=800
+            )
+
+            return response.choices[0].message.content.strip()
+
+        except Exception as e:
+            logger.error(f"General AI response failed: {str(e)}")
+            return "I'm here to help. Could you please clarify your question?"

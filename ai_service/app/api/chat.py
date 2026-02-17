@@ -23,7 +23,7 @@ import json
 from app.services.stt import SpeechToTextService
 from app.services.ocr import OCRService
 from app.services.extractor import AIExtractorService
-from app.config import OPENAI_API_KEY,DJANGO_ACCESS_TOKEN
+from app.config import OPENAI_API_KEY
 
 router = APIRouter()
 
@@ -182,10 +182,11 @@ async def ai_chat(
 
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        print("REAL STT/OCR ERROR:",e)
         raise HTTPException(
             status_code=500,
-            detail="Failed to process input (STT/OCR error)"
+            detail=str(e)
         )
 
     # --------------------------------------------------
@@ -220,9 +221,25 @@ async def ai_chat(
     # --------------------------------------------------
     # DATABASE READ (SAFE + TIMEOUT)
     # --------------------------------------------------
+    # --------------------------------------------------
+    # DATABASE READ (SAFE + TIMEOUT)
+    # --------------------------------------------------
     db_data = None
 
+    # Get Authorization header from frontend
+    auth_header = request.headers.get("Authorization")
+
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+
     if backend_action and user_id:
+        auth_header = request.headers.get("Authorization")
+
+        if not auth_header:
+            raise HTTPException(
+                status_code=401,
+                detail="Authorization header missing"
+            )
         try:
             endpoint = backend_action.get("api_endpoint", "")
 
@@ -241,7 +258,7 @@ async def ai_chat(
                 url,
                 params=params,
                 headers={
-                    "Authorization": f"Bearer {DJANGO_ACCESS_TOKEN}"
+                    "Authorization": auth_header
                 },
                 timeout=5
             )
@@ -261,6 +278,11 @@ async def ai_chat(
     "user_response",
     "I understood your request."
     )
+    # 🔥 GENERAL AI FALLBACK
+    if intent == "unclear":
+        assistant_message = extractor.generate_general_response(final_text)
+        backend_action = None
+        db_data = None
 
     # 🔥 SMART MEDICINE FORMATTER
     if intent == "check_reminder" and isinstance(db_data, list):
