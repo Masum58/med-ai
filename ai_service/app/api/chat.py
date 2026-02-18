@@ -278,66 +278,73 @@ async def ai_chat(
     "user_response",
     "I understood your request."
     )
-    # 🔥 GENERAL AI FALLBACK
+    #  GENERAL AI FALLBACK
     if intent == "unclear":
         assistant_message = extractor.generate_general_response(final_text)
         backend_action = None
         db_data = None
 
-    # 🔥 SMART MEDICINE FORMATTER
+    #  SMART MEDICINE FORMATTER
+    #  SMART MEDICINE FORMATTER
     if intent == "check_reminder" and isinstance(db_data, list):
-        try:
-            lines = []
-            lines.append("Here are today's medicines:\n")
 
-            for prescription in db_data:
-                patient_name = prescription.get("patient", {}).get("name", "Unknown")
+        if not db_data:
+            assistant_message = "You don't have any medicines scheduled for today."
+        else:
+            try:
+                lines = []
+                lines.append("Here are today's medicines:\n")
 
-                for med in prescription.get("medicines", []):
-                    name = med.get("name", "Unknown")
-                    stock = med.get("stock", 0)
+                for prescription in db_data:
+                    for med in prescription.get("medicines", []):
+                        name = med.get("name", "Unknown")
+                        stock = med.get("stock", 0)
 
-                    schedule_parts = []
+                        schedule_parts = []
 
-                    for period in ["morning", "afternoon", "evening", "night"]:
-                        period_data = med.get(period)
-                        if period_data:
-                            time = period_data.get("time")
-                            before = period_data.get("before_meal")
-                            after = period_data.get("after_meal")
+                        for period in ["morning", "afternoon", "evening", "night"]:
+                            period_data = med.get(period)
+                            if period_data:
+                                time = period_data.get("time")
+                                before = period_data.get("before_meal")
+                                after = period_data.get("after_meal")
 
-                            meal_text = ""
-                            if before:
-                                meal_text = "before meal"
-                            elif after:
-                                meal_text = "after meal"
+                                meal_text = ""
+                                if before:
+                                    meal_text = "before meal"
+                                elif after:
+                                    meal_text = "after meal"
 
-                            schedule_parts.append(f"{period} at {time} ({meal_text})")
+                                schedule_parts.append(f"{period} at {time} ({meal_text})")
 
-                    schedule_text = ", ".join(schedule_parts)
+                        schedule_text = ", ".join(schedule_parts)
+                        lines.append(f"- {name} → {schedule_text} | Stock: {stock}")
 
-                    lines.append(
-                        f"- {name} → {schedule_text} | Stock: {stock}"
-                    )
+                assistant_message = "\n".join(lines)
 
-            assistant_message = "\n".join(lines)
+            except Exception as e:
+                print("FORMAT ERROR:", e)
 
-        except Exception as e:
-            print("FORMAT ERROR:", e)
+    
 
 
     # Refill enrichment
     if intent == "refill_medicine" and isinstance(db_data, list):
-        try:
-            lines = [f"You have {len(db_data)} medicines running low."]
-            for med in db_data:
-                name = med.get("name", "Unknown medicine")
-                stock = med.get("stock", 0)
-                lines.append(f"{name} has {stock} tablets left.")
-            lines.append("Would you like to refill any of them?")
-            assistant_message = " ".join(lines)
-        except Exception:
-            pass
+
+        if not db_data:
+            assistant_message = "All your medicines have sufficient stock."
+        else:
+            try:
+                lines = [f"You have {len(db_data)} medicines running low."]
+                for med in db_data:
+                    name = med.get("name", "Unknown medicine")
+                    stock = med.get("stock", 0)
+                    lines.append(f"{name} has {stock} tablets left.")
+                lines.append("Would you like to refill any of them?")
+                assistant_message = " ".join(lines)
+            except Exception:
+                pass
+
 
     # --------------------------------------------------
     # TTS ORCHESTRATION
