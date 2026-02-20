@@ -288,12 +288,21 @@ async def ai_chat(
     #  SMART MEDICINE FORMATTER
     if intent == "check_reminder" and isinstance(db_data, list):
 
-        if not db_data:
-            assistant_message = "You don't have any medicines scheduled for today."
-        else:
-            try:
+        try:
+            time_filter = None
+
+            if backend_action:
+                time_filter = backend_action.get("query_filters", {}).get("time_of_day")
+
+            if not db_data:
+                assistant_message = "You don't have any medicines scheduled for today."
+            else:
                 lines = []
-                lines.append("Here are today's medicines:\n")
+
+                if time_filter:
+                    lines.append(f"Here are your {time_filter} medicines:\n")
+                else:
+                    lines.append("Here are today's medicines:\n")
 
                 for prescription in db_data:
                     for med in prescription.get("medicines", []):
@@ -302,8 +311,15 @@ async def ai_chat(
 
                         schedule_parts = []
 
-                        for period in ["morning", "afternoon", "evening", "night"]:
+                        periods = ["morning", "afternoon", "evening", "night"]
+
+                        #  APPLY FILTER
+                        if time_filter:
+                            periods = [time_filter]
+
+                        for period in periods:
                             period_data = med.get(period)
+
                             if period_data:
                                 time = period_data.get("time")
                                 before = period_data.get("before_meal")
@@ -315,15 +331,24 @@ async def ai_chat(
                                 elif after:
                                     meal_text = "after meal"
 
-                                schedule_parts.append(f"{period} at {time} ({meal_text})")
+                                schedule_parts.append(
+                                    f"{period} at {time} ({meal_text})"
+                                )
 
-                        schedule_text = ", ".join(schedule_parts)
-                        lines.append(f"- {name} → {schedule_text} | Stock: {stock}")
+                        if schedule_parts:
+                            schedule_text = ", ".join(schedule_parts)
+                            lines.append(
+                                f"- {name} → {schedule_text} | Stock: {stock}"
+                            )
 
-                assistant_message = "\n".join(lines)
+                if len(lines) == 1:
+                    assistant_message = "You don't have any medicines scheduled for this time."
+                else:
+                    assistant_message = "\n".join(lines)
 
-            except Exception as e:
-                print("FORMAT ERROR:", e)
+        except Exception as e:
+            print("FORMAT ERROR:", e)
+    
 
     
 
@@ -349,15 +374,34 @@ async def ai_chat(
     # --------------------------------------------------
     # TTS ORCHESTRATION
     # --------------------------------------------------
+    # --------------------------------------------------
+    # TTS ORCHESTRATION (Production Safe)
+    # --------------------------------------------------
     tts_payload = None
 
     if reply_mode in [ReplyMode.voice, ReplyMode.both]:
+
+        tts_text = assistant_message.strip()
+
+        MAX_TTS_LENGTH = 1300
+        SAFE_TTS_LENGTH = 1100
+
+        if len(tts_text) > MAX_TTS_LENGTH:
+            tts_text = tts_text[:SAFE_TTS_LENGTH].rstrip()
+
+            # Avoid cutting mid-sentence
+            last_dot = tts_text.rfind(".")
+            if last_dot > 200:
+                tts_text = tts_text[:last_dot + 1]
+
+            tts_text += " Please check the full details in your app."
+
         tts_payload = {
             "enabled": True,
             "endpoint": "/voice/tts",
             "method": "POST",
             "payload": {
-                "text": assistant_message,
+                "text": tts_text,
                 "voice": "nova",
                 "speed": 0.9
             }

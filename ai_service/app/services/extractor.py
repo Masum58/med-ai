@@ -309,14 +309,14 @@ CRITICAL RULES:
         logger.info("Extracting intent from voice...")
         logger.info(f"Input: {transcribed_text}")
         
-        prompt = f"""Voice assistant for health management.
+        prompt = f"""You are a professional voice assistant for a health management system.
 
 User: "{transcribed_text}"
 
 Return DATABASE-ACTIONABLE JSON:
 
 {{
-    "intent": "check_reminder|add_medicine|view_prescription|schedule_appointment|refill_medicine|ask_question",
+    "intent":  "intent": "check_reminder|add_medicine|view_prescription|schedule_appointment|refill_medicine|ask_question|unclear",
     "confidence": 0.0-1.0,
     
     "database_action": {{
@@ -325,7 +325,8 @@ Return DATABASE-ACTIONABLE JSON:
         "query_filters": {{
             "today": true,
             "medicine_name": "name or null",
-            "date_range": "today|week|month|null"
+            "date_range": "today|week|month|null",
+            "time_of_day": "morning|afternoon|evening|night|null"
         }},
         "post_data": {{}} or null
     }},
@@ -339,14 +340,20 @@ Return DATABASE-ACTIONABLE JSON:
         "query": "user's question"
     }},
     
-    "ui_action": "show_medicine_list|show_prescription_details|show_add_form|show_calendar",
+    "ui_action": "show_medicine_list|show_prescription_details|show_add_form|show_calendar|show_error",
     "confirmation_needed": true/false,
     "user_response": "Simple confirmation message"
 }}
 
-EXAMPLES:
+IMPORTANT:
 
-"I want to know today's medicine":
+1. ALWAYS respond in English only.
+2. If user mentions morning/afternoon/evening/night → set time_of_day properly.
+3. If user asks for today's medicines → set today=true.
+4. If request is unclear → set intent="unclear".
+5. Return ONLY JSON. No explanations.
+
+Return ONLY JSON.":
 {{
     "intent": "check_reminder",
     "confidence": 0.9,
@@ -440,7 +447,7 @@ Return ONLY JSON.
                     {
                         "role": "system",
                         "content":(
-                            "You are a professional voice assistant for a health system. "
+                            "You are a professional deterministic intent classifier for a medical system voice assistant for a health system. "
                             "ALWAYS generate responses in English only. "
                             "Do NOT switch language even if the user speaks another language. "
                             "Return only valid JSON with database-actionable responses."
@@ -459,13 +466,27 @@ Return ONLY JSON.
             result_text = response.choices[0].message.content.strip()
             
             # Step 3: Clean markdown code blocks
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
+            
+            #  ROBUST JSON CLEANING
+            if "```" in result_text:
+                parts = result_text.split("```")
+                if len(parts) >= 2:
+                    result_text = parts[1].strip()
+
+            start = result_text.find("{")
+            end = result_text.rfind("}")
+            if start != -1 and end != -1:
+                result_text = result_text[start:end+1]
             
             # Step 4: Parse JSON
             extracted_intent = json.loads(result_text)
+
+            #  SAFETY OVERRIDE FOR MEDICINE QUERY
+            lower_text = transcribed_text.lower()
+            if "today" in lower_text and "medicine" in lower_text:
+                extracted_intent["intent"] = "check_reminder"
+                extracted_intent["confidence"] = 0.95
+
             
             logger.info(f"Intent: {extracted_intent.get('intent')}")
             logger.info(f"Confidence: {extracted_intent.get('confidence')}")
