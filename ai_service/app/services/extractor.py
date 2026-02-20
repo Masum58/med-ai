@@ -186,7 +186,7 @@ CRITICAL RULES:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a medical data extraction expert. Extract ALL information accurately including sex, next appointment, and #quantity numbers. Return only valid JSON."
+                        "content": "You are a medical data extraction expert. Extract ALL information accurately including sex, next appointment, and #quantity numbers. Always respond in English. Return only valid JSON."
                     },
                     {
                         "role": "user",
@@ -201,10 +201,17 @@ CRITICAL RULES:
             result_text = response.choices[0].message.content.strip()
             
             # Step 3: Remove markdown code blocks if present
-            if result_text.startswith("```json"):
-                result_text = result_text.replace("```json", "").replace("```", "").strip()
-            elif result_text.startswith("```"):
-                result_text = result_text.replace("```", "").strip()
+            # Step 3: Robust JSON cleaning
+            if "```" in result_text:
+                parts = result_text.split("```")
+                if len(parts) >= 2:
+                    result_text = parts[1].strip()
+
+            # Extract only JSON block
+            start = result_text.find("{")
+            end = result_text.rfind("}")
+            if start != -1 and end != -1:
+                result_text = result_text[start:end+1]
             
             # Step 4: Parse JSON response
             extracted_data = json.loads(result_text)
@@ -432,14 +439,19 @@ Return ONLY JSON.
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful voice assistant. Return only valid JSON with database-actionable responses."
+                        "content":(
+                            "You are a professional voice assistant for a health system. "
+                            "ALWAYS generate responses in English only. "
+                            "Do NOT switch language even if the user speaks another language. "
+                            "Return only valid JSON with database-actionable responses."
+                        ) 
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                temperature=0.2,  # Slightly higher for natural language
+                temperature=0.0,  # deterministic intent detection
                 max_tokens=1000
             )
             
@@ -474,7 +486,7 @@ Return ONLY JSON.
                 "extracted_data": {"query": transcribed_text},
                 "ui_action": "show_error",
                 "confirmation_needed": True,
-                "user_response": f"I heard: {transcribed_text}. What would you like me to do?"
+                "user_response": f"I'm not sure what you would like to do. Could you please clarify?"
             }
     
     def extract_lab_report_data(self, raw_text: str) -> Dict[str, Any]:
@@ -607,7 +619,9 @@ Rules:
                     {
                         "role": "system",
                         "content": (
-                            "You are a helpful AI assistant. "
+                            "You are a professional AI assistant. "
+                            "ALWAYS respond in English only. "
+                            "Do NOT switch to any other language even if the user speaks another language. "
                             "If the user asks medical database related questions, "
                             "tell them to use the health features. "
                             "Otherwise answer naturally and helpfully."
